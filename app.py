@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+st.info("Upload a PDF and ask questions. The system will answer using only document content.")
 
 API_URL = "https://ask-anything-api.onrender.com"
 

@@ -104,8 +104,17 @@ Swagger Docs
 
 https://ask-anything-api.onrender.com/docs
 
-Screenshots
-UI Interface
+
+## Demo Use Case
+
+1. Upload a research paper PDF
+2. Ask: "What is the main contribution?"
+3. The system retrieves relevant sections and generates an answer with source citations.
+
+This simulates real-world use cases such as:
+- Research assistant
+- Legal document analysis
+- Resume screening
 
 
 
