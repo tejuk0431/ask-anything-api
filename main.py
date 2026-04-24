@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from openai import OpenAI
 from pypdf import PdfReader
 import os
@@ -6,10 +6,13 @@ import numpy as np
 import faiss
 
 app = FastAPI()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key)
 
 chunks = []
 index = None
+uploaded_filename = None
 
 
 @app.get("/")
@@ -19,23 +22,31 @@ def home():
 
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
-    text = ""
+    pages_text = []
 
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text()
         if page_text:
-            text += page_text + "\n"
+            pages_text.append({
+                "page": page_number,
+                "text": page_text
+            })
 
-    return text
+    return pages_text
 
 
-def split_text(text, chunk_size=500):
-    words = text.split()
+def split_text_by_page(pages_text, chunk_size=500):
     result = []
 
-    for i in range(0, len(words), chunk_size):
-        chunk = " ".join(words[i:i + chunk_size])
-        result.append(chunk)
+    for page in pages_text:
+        words = page["text"].split()
+
+        for i in range(0, len(words), chunk_size):
+            chunk_text = " ".join(words[i:i + chunk_size])
+            result.append({
+                "page": page["page"],
+                "text": chunk_text
+            })
 
     return result
 
@@ -50,61 +61,111 @@ def get_embedding(text):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    global chunks, index
+    global chunks, index, uploaded_filename
 
-    text = extract_text_from_pdf(file.file)
-    chunks = split_text(text)
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-    embeddings = []
+    try:
+        pages_text = extract_text_from_pdf(file.file)
 
-    for chunk in chunks:
-        embedding = get_embedding(chunk)
-        embeddings.append(embedding)
+        if not pages_text:
+            raise HTTPException(
+                status_code=400,
+                detail="No readable text found in the PDF"
+            )
 
-    embedding_array = np.array(embeddings).astype("float32")
+        chunks = split_text_by_page(pages_text)
 
-    index = faiss.IndexFlatL2(len(embedding_array[0]))
-    index.add(embedding_array)
+        embeddings = []
+        for chunk in chunks:
+            embeddings.append(get_embedding(chunk["text"]))
 
-    return {
-        "filename": file.filename,
-        "chunks_created": len(chunks),
-        "message": "PDF uploaded and indexed successfully"
-    }
+        embedding_array = np.array(embeddings).astype("float32")
+
+        index = faiss.IndexFlatL2(len(embedding_array[0]))
+        index.add(embedding_array)
+
+        uploaded_filename = file.filename
+
+        return {
+            "filename": uploaded_filename,
+            "chunks_created": len(chunks),
+            "message": "PDF uploaded and indexed successfully"
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/ask-doc")
 def ask_document(q: str):
-    global chunks, index
+    global chunks, index, uploaded_filename
 
     if index is None:
-        return {"error": "No document uploaded yet"}
+        raise HTTPException(
+            status_code=400,
+            detail="No document uploaded yet. Please upload a PDF first."
+        )
 
-    question_embedding = np.array([get_embedding(q)]).astype("float32")
+    try:
+        question_embedding = np.array([get_embedding(q)]).astype("float32")
 
-    distances, indexes = index.search(question_embedding, k=3)
+        distances, indexes = index.search(question_embedding, k=3)
 
-    context = "\n\n".join([chunks[i] for i in indexes[0]])
+        retrieved_chunks = []
+        for i in indexes[0]:
+            retrieved_chunks.append(chunks[i])
 
-    prompt = f"""
-    Answer the question using only the context below.
+        context = "\n\n".join(
+            [
+                f"Source page {chunk['page']}:\n{chunk['text']}"
+                for chunk in retrieved_chunks
+            ]
+        )
 
-    Context:
-    {context}
+        prompt = f"""
+        Answer the question using only the document context below.
+        If the answer is not available in the context, say:
+        "I could not find the answer in the uploaded document."
 
-    Question:
-    {q}
-    """
+        Document context:
+        {context}
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You answer questions based only on the provided document context."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+        Question:
+        {q}
+        """
 
-    return {
-        "question": q,
-        "answer": response.choices[0].message.content
-    }
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a document question-answering assistant. Use only the provided context."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        sources = []
+        for chunk in retrieved_chunks:
+            sources.append({
+                "filename": uploaded_filename,
+                "page": chunk["page"],
+                "preview": chunk["text"][:250]
+            })
+
+        return {
+            "question": q,
+            "answer": response.choices[0].message.content,
+            "sources": sources
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
