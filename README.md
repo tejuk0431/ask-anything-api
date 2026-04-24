@@ -224,3 +224,15 @@ Replace with:
 - Source citation with page references
 - Error handling and validation
 - Deployed API with Swagger UI
+
+
+
+
+
+
+## Screenshots
+!### UI Interface
+![UI](screenshot1.png) 
+
+### Answer with Sources
+![Answer](screenshot2.png)
