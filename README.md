@@ -117,8 +117,19 @@ This simulates real-world use cases such as:
 - Resume screening
 
 
+## Limitations
 
+- Works with single document at a time
+- Requires OpenAI API key and active billing
+- Performance depends on document size and chunking
 
+## Future Improvements
+
+- Support multiple documents
+- Add persistent vector database (e.g., Pinecone)
+- Improve chunking strategy
+- Add caching for embeddings
+- Add user authentication
 
 
 ## Screenshots
